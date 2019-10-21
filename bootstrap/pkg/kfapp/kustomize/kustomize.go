@@ -55,9 +55,8 @@ import (
 	"sigs.k8s.io/kustomize/v3/pkg/validators"
 	"sigs.k8s.io/kustomize/v3/plugin/builtin"
 	"strings"
-	"time"
-
 	// Auth plugins
+	_ "k8s.io/client-go/plugin/pkg/client/auth/azure"
 	_ "k8s.io/client-go/plugin/pkg/client/auth/gcp"
 	_ "k8s.io/client-go/plugin/pkg/client/auth/oidc"
 )
@@ -173,7 +172,13 @@ func (kustomize *kustomize) Apply(resources kftypesv3.ResourceEnum) error {
 				Message: fmt.Sprintf("can not encode component %v as yaml Error %v", app.Name, err),
 			}
 		}
-		err = apply.Apply(data)
+		err = backoff.Retry(func() error {
+			err := apply.Apply(data)
+			if err != nil {
+				return err
+			}
+			return nil
+		}, utils.NewDefaultBackoff())
 		if err != nil {
 			return err
 		}
@@ -183,10 +188,7 @@ func (kustomize *kustomize) Apply(resources kftypesv3.ResourceEnum) error {
 	defaultProfileNamespace := kftypesv3.EmailToDefaultName(kustomize.kfDef.Spec.Email)
 	// Default user namespace when multi-tenancy disabled
 	anonymousNamespace := "anonymous"
-	b := backoff.NewExponentialBackOff()
-	b.InitialInterval = 3 * time.Second
-	b.MaxInterval = 30 * time.Second
-	b.MaxElapsedTime = 5 * time.Minute
+	b := utils.NewDefaultBackoff()
 	return backoff.Retry(func() error {
 		if !(apply.IfNamespaceExist(defaultProfileNamespace) || apply.IfNamespaceExist(anonymousNamespace)) {
 			msg := "Default user namespace pending creation..."
@@ -901,11 +903,9 @@ func GenerateKustomizationFile(kfDef *kfconfig.KfConfig, root string,
 			//TODO upgrade to v2.0.4 when available
 			baseKfDef.Spec.Components = moveToFront("application", baseKfDef.Spec.Components)
 			baseKfDef.Spec.Components = moveToFront("application-crds", baseKfDef.Spec.Components)
-			if kfDef.Spec.UseIstio {
-				baseKfDef.Spec.Components = moveToFront("istio", baseKfDef.Spec.Components)
-				baseKfDef.Spec.Components = moveToFront("istio-install", baseKfDef.Spec.Components)
-				baseKfDef.Spec.Components = moveToFront("istio-crds", baseKfDef.Spec.Components)
-			}
+			baseKfDef.Spec.Components = moveToFront("istio", baseKfDef.Spec.Components)
+			baseKfDef.Spec.Components = moveToFront("istio-install", baseKfDef.Spec.Components)
+			baseKfDef.Spec.Components = moveToFront("istio-crds", baseKfDef.Spec.Components)
 			writeErr := WriteKfDef(baseKfDef, basefile)
 			if writeErr != nil {
 				return writeErr
