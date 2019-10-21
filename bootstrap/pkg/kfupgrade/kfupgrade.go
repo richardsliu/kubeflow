@@ -22,14 +22,18 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"time"
 
 	kfapis "github.com/kubeflow/kubeflow/bootstrap/v3/pkg/apis"
+	kfapisv3 "github.com/kubeflow/kubeflow/bootstrap/v3/pkg/apis"
 	kftypesv3 "github.com/kubeflow/kubeflow/bootstrap/v3/pkg/apis/apps"
 	"github.com/kubeflow/kubeflow/bootstrap/v3/pkg/apis/apps/configconverters"
 	kfconfig "github.com/kubeflow/kubeflow/bootstrap/v3/pkg/apis/apps/kfconfig"
 	kfupgrade "github.com/kubeflow/kubeflow/bootstrap/v3/pkg/apis/apps/kfupgrade/v1alpha1"
 	"github.com/kubeflow/kubeflow/bootstrap/v3/pkg/kfapp/coordinator"
 	log "github.com/sirupsen/logrus"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	corev1 "k8s.io/client-go/kubernetes/typed/core/v1"
 )
 
 type KfUpgrader struct {
@@ -263,6 +267,33 @@ func (upgrader *KfUpgrader) Apply() error {
 		log.Errorf("Failed to generate KfApp: %v", err)
 		return err
 	}
+
+	//err = kfApp.Delete(kftypesv3.K8S)
+	//if err != nil {
+	//	log.Errorf("Couldn't delete KfApp: %v", err)
+	//	return err
+	//}
+
+	corev1client, err := corev1.NewForConfig(kftypesv3.GetConfig())
+	if err != nil {
+		return &kfapisv3.KfError{
+			Code:    int(kfapisv3.INTERNAL_ERROR),
+			Message: fmt.Sprintf("couldn't get core/v1 client Error: %v", err),
+		}
+	}
+	namespace := upgrader.OldKfCfg.ObjectMeta.Namespace
+	log.Infof("deleting namespace: %v", namespace)
+	ns, nsMissingErr := corev1client.Namespaces().Get(namespace, metav1.GetOptions{})
+	if nsMissingErr == nil {
+		nsErr := corev1client.Namespaces().Delete(ns.Name, metav1.NewDeleteOptions(int64(100)))
+		if nsErr != nil {
+			return &kfapisv3.KfError{
+				Code:    int(kfapisv3.INVALID_ARGUMENT),
+				Message: fmt.Sprintf("couldn't delete namespace %v Error: %v", namespace, nsErr),
+			}
+		}
+	}
+	time.Sleep(60 * time.Second)
 
 	return kfApp.Apply(kftypesv3.K8S)
 }
