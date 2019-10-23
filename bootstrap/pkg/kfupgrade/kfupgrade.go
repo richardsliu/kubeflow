@@ -22,7 +22,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
-	"time"
+	//"time"
 
 	kfapis "github.com/kubeflow/kubeflow/bootstrap/v3/pkg/apis"
 	kfapisv3 "github.com/kubeflow/kubeflow/bootstrap/v3/pkg/apis"
@@ -32,8 +32,10 @@ import (
 	kfupgrade "github.com/kubeflow/kubeflow/bootstrap/v3/pkg/apis/apps/kfupgrade/v1alpha1"
 	"github.com/kubeflow/kubeflow/bootstrap/v3/pkg/kfapp/coordinator"
 	log "github.com/sirupsen/logrus"
+	crdclientset "k8s.io/apiextensions-apiserver/pkg/client/clientset/clientset/typed/apiextensions/v1beta1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
-	corev1 "k8s.io/client-go/kubernetes/typed/core/v1"
+	//corev1 "k8s.io/client-go/kubernetes/typed/core/v1"
+	
 )
 
 type KfUpgrader struct {
@@ -113,6 +115,7 @@ func NewKfUpgrade(upgradeConfig string) (*KfUpgrader, error) {
 		}
 	}
 
+	log.Infof(">>>>>> BASE CONFIG PATH: %v", upgrade.Spec.BaseConfigPath)
 	// Try to find the old KfCfg.
 	oldKfCfg, _, err := findKfCfg(upgrade.Spec.CurrentKfDef)
 	if err != nil || oldKfCfg == nil {
@@ -274,26 +277,50 @@ func (upgrader *KfUpgrader) Apply() error {
 	//	return err
 	//}
 
-	corev1client, err := corev1.NewForConfig(kftypesv3.GetConfig())
+	apiextclientset, err := crdclientset.NewForConfig(kustomize.restConfig)
 	if err != nil {
 		return &kfapisv3.KfError{
 			Code:    int(kfapisv3.INTERNAL_ERROR),
-			Message: fmt.Sprintf("couldn't get core/v1 client Error: %v", err),
+			Message: fmt.Sprintf("couldn't get apiextensions client Error: %v", err),
 		}
 	}
-	namespace := upgrader.OldKfCfg.ObjectMeta.Namespace
-	log.Infof("deleting namespace: %v", namespace)
-	ns, nsMissingErr := corev1client.Namespaces().Get(namespace, metav1.GetOptions{})
-	if nsMissingErr == nil {
-		nsErr := corev1client.Namespaces().Delete(ns.Name, metav1.NewDeleteOptions(int64(100)))
-		if nsErr != nil {
-			return &kfapisv3.KfError{
-				Code:    int(kfapisv3.INVALID_ARGUMENT),
-				Message: fmt.Sprintf("couldn't delete namespace %v Error: %v", namespace, nsErr),
-			}
+	do := &metav1.DeleteOptions{}
+	lo := metav1.ListOptions{}
+
+	//	LabelSelector: kftypesv3.DefaultAppLabel + "=" + kustomize.kfDef.Name,
+	//}
+	crdsErr := apiextclientset.Applications().DeleteCollection(do, lo)
+	if crdsErr != nil {
+		return &kfapisv3.KfError{
+			Code:    int(kfapisv3.INVALID_ARGUMENT),
+			Message: fmt.Sprintf("couldn't delete customresourcedefinitions Error: %v", crdsErr),
 		}
 	}
-	time.Sleep(60 * time.Second)
+
+	//corev1client, err := corev1.NewForConfig(kftypesv3.GetConfig())
+	//if err != nil {
+	//	return &kfapisv3.KfError{
+	//		Code:    int(kfapisv3.INTERNAL_ERROR),
+	//		Message: fmt.Sprintf("couldn't get core/v1 client Error: %v", err),
+	//	}
+	//}
+
+	//namespaces := []string{upgrader.OldKfCfg.ObjectMeta.Namespace, "istio-system"}
+	//for _, namespace := range namespaces {
+	//	//namespace := upgrader.OldKfCfg.ObjectMeta.Namespace
+	//	log.Infof("deleting namespace: %v", namespace)
+	//	ns, nsMissingErr := corev1client.Namespaces().Get(namespace, metav1.GetOptions{})
+	//	if nsMissingErr == nil {
+	//		nsErr := corev1client.Namespaces().Delete(ns.Name, metav1.NewDeleteOptions(int64(100)))
+	//		if nsErr != nil {
+	//			return &kfapisv3.KfError{
+	//				Code:    int(kfapisv3.INVALID_ARGUMENT),
+	//				Message: fmt.Sprintf("couldn't delete namespace %v Error: %v", namespace, nsErr),
+	//			}
+	//		}
+	//	}
+	//	time.Sleep(60 * time.Second)
+	//}
 
 	return kfApp.Apply(kftypesv3.K8S)
 }
